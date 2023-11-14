@@ -1,33 +1,26 @@
-from collections import defaultdict
 import sys, os
+sys.path.append(os.path.dirname(__file__))
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import math
 import time
 import torch
 import pickle
+import evaluate
+from logging import getLogger
 from transformers import AutoTokenizer
 from datasets import load_dataset
-import evaluate
-from transformers.data.data_collator import DataCollator, DataCollatorWithPadding, default_data_collator
+from transformers.data.data_collator import DataCollatorWithPadding, default_data_collator
 # from transformers.trainer_callback import DEFAULT_CALLBACKS, CallbackHandler
-from transformers.integrations import get_reporting_integration_callbacks
 from transformers.utils import find_labels
 from transformers import AutoModelForSeq2SeqLM
-from transformers import (
-    AutoTokenizer, AutoModelForSeq2SeqLM, LogitsProcessorList,
-    MinLengthLogitsProcessor, StoppingCriteriaList, MaxLengthCriteria,
-)
-from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions
-
-from logging import getLogger
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 from LLM_KD.data import DataWrapper
 from LLM_KD.data_collator import Datacollator
 from LLM_KD.optimizer_wrapper import OptimizerWrapper
 from LLM_KD.scheduler_wrapper import SchedulerWrapper
-from LLM_KD.utils import count_num_examples, prepare_input, get_model_param_count
+from LLM_KD.utils import count_num_examples, prepare_input, get_model_param_count, decode_for_llama
 # from LLM_KD.llama import llama
-
 
 logger = getLogger(__name__)
 
@@ -155,64 +148,26 @@ if __name__ == "__main__":
             
             model.train()
             inputs = prepare_input(config, inputs)
-
-            labels = None
+            labels = prepare_input(config, inputs.get("labels", None))
             
             outputs = model(**inputs)
-
-            src_trg_pred = decode_for_llama(inputs, outputs, model, tokenizer, method='greedy')
             
-            # We don't use .loss here since the model may return tuples instead of ModelOutput.
-            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-            
-            tr_loss += loss        
+            src_trg_pred = decode_for_llama(inputs, outputs, model, tokenizer, method='plain')
 
+            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
+            # move labels to correct device to enable PP
+            labels = labels.to(outputs['logits'].device)
+            loss = loss_fct(outputs['logits'].view(-1, outputs['logits'].size(-1)), labels.view(-1))
+                
+            model.zero_grad()
+            loss.mean().backward()
             # Optimizer step
             optimizer.step()
+            
             if not isinstance(lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 lr_scheduler.step()
 
-            model.zero_grad()
+            tr_loss += loss
 
     logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
 
-
-def decode_for_llama(inputs, outputs, model, tokenizer, method='greedy'):
-    # natural language source sentence 
-    natural_src = tokenizer.batch_decode(inputs['input_ids'], skip_special_tokens=True)
-
-    # ground truth translation
-    label = inputs['labels'].clone()
-    label = torch.where(label != -100, label, tokenizer.pad_token_id)
-    gt_translation = tokenizer.batch_decode(label, skip_special_tokens=True)
-    
-    if method == 'greedy':
-        # For Greedy decoding, we have to forward the model without teacher forcing.
-        # So, we have to prepare the decoder input ids. 
-        # define decoder start token ids
-        decoder_input = torch.ones((inputs['input_ids'].size(0), 1), device=model.device, dtype=torch.long)
-        decoder_input = decoder_input * model.config.decoder_start_token_id
-
-        # add encoder_outputs to model keyword arguments
-        model_kwargs = {
-            "encoder_outputs": BaseModelOutputWithPastAndCrossAttentions(outputs['encoder_last_hidden_state']),
-            "attention_mask": inputs['attention_mask']
-        }
-        # instantiate logits processors
-        logits_processor = LogitsProcessorList(
-            [ MinLengthLogitsProcessor(5, eos_token_id=model.config.eos_token_id),]
-        )            
-
-        greedy_output = model.greedy_search(decoder_input, logits_processor=logits_processor, **model_kwargs)
-        translation = tokenizer.batch_decode(greedy_output, skip_special_tokens=True)
-    else:
-        # get sequence length from label to decode only without label padding(i.e. -100) 
-        # this is for the case that the last batch has shorter sequence length than the other batches
-        seq_len = torch.count_nonzero(label, dim=-1)    
-
-        translations = []
-        for length, logits in zip(seq_len, outputs['logits']):
-            logits = logits[:length].argmax(dim=-1)
-            translations.append(tokenizer.batch_decode(logits, skip_special_tokens=True))
-        
-    return {"src": natural_src, "trg": gt_translation, "pred": translations}
