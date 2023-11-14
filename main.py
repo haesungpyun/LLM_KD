@@ -36,8 +36,11 @@ if __name__ == "__main__":
         'model_name': 't5-small'
     }
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
     # Load Model
     model = AutoModelForSeq2SeqLM.from_pretrained(config["model_name"])
+    model = model.to(device)
     
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(config["model_name"])

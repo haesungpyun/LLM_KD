@@ -18,7 +18,6 @@ from .utils import set_seed, seed_worker
 
 logger = logging.get_logger(__name__)
 
-
 class DataWrapper:
     def __init__(
         self,
@@ -26,7 +25,7 @@ class DataWrapper:
         model,
         tokenizer,
         data_collator,
-        label_names = None
+        label_names = None,
     ):
         self.config = config
         self.model = model
@@ -36,11 +35,14 @@ class DataWrapper:
 
     def preprocess_function(
         self,
-        examples
+        examples   
     ):
-        source_lang = "en"
-        target_lang = "fr"
-        prefix = f"translate {source_lang} to {target_lang}: "
+        source_lang = 'en'
+        target_lang = 'de'
+        prefix = f"translate English to German: "
+        
+        logger.info(f'prefix: , {prefix}')
+        
         inputs = [prefix + example[source_lang] for example in examples["translation"]]
         targets = [example[target_lang] for example in examples["translation"]]
         model_inputs = self.tokenizer(inputs, text_target=targets, max_length=128, truncation=True)
