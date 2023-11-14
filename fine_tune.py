@@ -5,15 +5,14 @@ from transformers import AutoTokenizer
 from transformers import DataCollatorForSeq2Seq
 from transformers import AutoModelForSeq2SeqLM, Seq2SeqTrainingArguments, Seq2SeqTrainer
 
-with open('tokenized_train.pkl', 'rb') as f:
-    train_data = pickle.load(f)
+with open('./tokenized_train.pkl', 'rb') as f:
+    train_data = pickle.load(f).select(range(450000))
 
-with open('tokenized_valid.pkl', 'rb') as f:
+with open('./tokenized_valid.pkl', 'rb') as f:
     valid_data = pickle.load(f)
 
-with open('tokenized_test.pkl', 'rb') as f:
+with open('./tokenized_test.pkl', 'rb') as f:
     test_data = pickle.load(f)
-
 
 checkpoint = "t5-base"
 tokenizer = AutoTokenizer.from_pretrained(checkpoint)
